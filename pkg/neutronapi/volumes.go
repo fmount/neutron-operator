@@ -4,10 +4,11 @@ import (
 	"github.com/openstack-k8s-operators/lib-common/modules/storage"
 	neutronv1beta1 "github.com/openstack-k8s-operators/neutron-operator/api/v1beta1"
 	corev1 "k8s.io/api/core/v1"
+	"strconv"
 )
 
 // GetInitVolumeMounts - Nova Control Plane init task VolumeMounts
-func GetInitVolumeMounts(extraVol []neutronv1beta1.NeutronExtraVolMounts, svc []storage.PropagationType) []corev1.VolumeMount {
+func GetInitVolumeMounts(secretNames []string, extraVol []neutronv1beta1.NeutronExtraVolMounts, svc []storage.PropagationType) []corev1.VolumeMount {
 	vm := []corev1.VolumeMount{
 		{
 			Name:      "scripts",
@@ -30,6 +31,8 @@ func GetInitVolumeMounts(extraVol []neutronv1beta1.NeutronExtraVolMounts, svc []
 			vm = append(vm, vol.Mounts...)
 		}
 	}
+	_, secretConfig := GetConfigSecretVolumes(secretNames)
+	vm = append(vm, secretConfig...)
 	return vm
 }
 
@@ -37,7 +40,7 @@ func GetInitVolumeMounts(extraVol []neutronv1beta1.NeutronExtraVolMounts, svc []
 // TODO: merge to GetVolumes when other controllers also switched to current config
 //
 //	mechanism.
-func GetAPIVolumes(name string, extraVol []neutronv1beta1.NeutronExtraVolMounts, svc []storage.PropagationType) []corev1.Volume {
+func GetAPIVolumes(name string, secretNames []string, extraVol []neutronv1beta1.NeutronExtraVolMounts, svc []storage.PropagationType) []corev1.Volume {
 	var scriptsVolumeDefaultMode int32 = 0755
 	var config0640AccessMode int32 = 0640
 
@@ -92,12 +95,15 @@ func GetAPIVolumes(name string, extraVol []neutronv1beta1.NeutronExtraVolMounts,
 			res = append(res, vol.Volumes...)
 		}
 	}
+
+	secretConfig, _ := GetConfigSecretVolumes(secretNames)
+	res = append(res, secretConfig...)
 	return res
 
 }
 
 // GetAPIVolumeMounts - Neutron API VolumeMounts
-func GetAPIVolumeMounts(extraVol []neutronv1beta1.NeutronExtraVolMounts, svc []storage.PropagationType) []corev1.VolumeMount {
+func GetAPIVolumeMounts(secretNames []string, extraVol []neutronv1beta1.NeutronExtraVolMounts, svc []storage.PropagationType) []corev1.VolumeMount {
 	res := []corev1.VolumeMount{
 		{
 			Name:      "etc-machine-id",
@@ -126,6 +132,38 @@ func GetAPIVolumeMounts(extraVol []neutronv1beta1.NeutronExtraVolMounts, svc []s
 			res = append(res, vol.Mounts...)
 		}
 	}
+
+	_, secretConfig := GetConfigSecretVolumes(secretNames)
+	res = append(res, secretConfig...)
 	return res
 
+}
+
+// GetSecretVolumes - Returns a list of volumes associated with a list of Secret names
+func GetConfigSecretVolumes(secretNames []string) ([]corev1.Volume, []corev1.VolumeMount) {
+	var config0640AccessMode int32 = 0640
+	secretVolumes := []corev1.Volume{}
+	secretMounts := []corev1.VolumeMount{}
+
+	for idx, secretName := range secretNames {
+		secretVol := corev1.Volume{
+			Name: secretName,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  secretName,
+					DefaultMode: &config0640AccessMode,
+				},
+			},
+		}
+		secretMount := corev1.VolumeMount{
+			Name: secretName,
+			// Each secret needs its own MountPath
+			MountPath: "/var/lib/config-data/secret-" + strconv.Itoa(idx),
+			ReadOnly:  true,
+		}
+		secretVolumes = append(secretVolumes, secretVol)
+		secretMounts = append(secretMounts, secretMount)
+	}
+
+	return secretVolumes, secretMounts
 }

@@ -16,11 +16,12 @@ func DbSyncJob(
 ) *batchv1.Job {
 
 	dbSyncExtraMounts := []neutronv1beta1.NeutronExtraVolMounts{}
+	secretNames := []string{}
 
 	runAsUser := int64(0)
-	initVolumeMounts := GetInitVolumeMounts(dbSyncExtraMounts, DbsyncPropagation)
-	volumeMounts := GetAPIVolumeMounts(dbSyncExtraMounts, DbsyncPropagation)
-	volumes := GetAPIVolumes(cr.Name, dbSyncExtraMounts, DbsyncPropagation)
+	initVolumeMounts := GetInitVolumeMounts(secretNames, dbSyncExtraMounts, DbsyncPropagation)
+	volumeMounts := GetAPIVolumeMounts(secretNames, dbSyncExtraMounts, DbsyncPropagation)
+	volumes := GetAPIVolumes(cr.Name, secretNames, dbSyncExtraMounts, DbsyncPropagation)
 
 	envVars := map[string]env.Setter{}
 	envVars["KOLLA_CONFIG_FILE"] = env.SetValue(KollaConfigDbSync)

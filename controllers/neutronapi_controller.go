@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	rabbitmqv1 "github.com/openstack-k8s-operators/infra-operator/apis/rabbitmq/v1beta1"
@@ -192,6 +193,39 @@ func (r *NeutronAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 // SetupWithManager -
 func (r *NeutronAPIReconciler) SetupWithManager(mgr ctrl.Manager) error {
+
+	// Watch for changes to any CustomServiceConfigSecrets. Global secrets
+	svcSecretFn := func(o client.Object) []reconcile.Request {
+		var namespace string = o.GetNamespace()
+		var secretName string = o.GetName()
+		result := []reconcile.Request{}
+
+		// get all API CRs
+		apis := &neutronv1beta1.NeutronAPIList{}
+		listOpts := []client.ListOption{
+			client.InNamespace(namespace),
+		}
+		if err := r.Client.List(context.Background(), apis, listOpts...); err != nil {
+			r.Log.Error(err, "Unable to retrieve API CRs %v")
+			return nil
+		}
+		for _, cr := range apis.Items {
+			for _, v := range cr.Spec.CustomServiceConfigSecrets {
+				if v == secretName {
+					name := client.ObjectKey{
+						Namespace: namespace,
+						Name:      cr.Name,
+					}
+					r.Log.Info(fmt.Sprintf("Secret %s is used by Cinder CR %s", secretName, cr.Name))
+					result = append(result, reconcile.Request{NamespacedName: name})
+				}
+			}
+		}
+		if len(result) > 0 {
+			return result
+		}
+		return nil
+	}
 	crs := &neutronv1beta1.NeutronAPIList{}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&neutronv1beta1.NeutronAPI{}).
@@ -205,6 +239,9 @@ func (r *NeutronAPIReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&keystonev1.KeystoneService{}).
 		Owns(&keystonev1.KeystoneEndpoint{}).
 		Owns(&rabbitmqv1.TransportURL{}).
+		// watch the secrets we don't own
+		Watches(&source.Kind{Type: &corev1.Secret{}},
+			handler.EnqueueRequestsFromMapFunc(svcSecretFn)).
 		Watches(&source.Kind{Type: &ovnclient.OVNDBCluster{}}, handler.EnqueueRequestsFromMapFunc(ovnclient.OVNDBClusterNamespaceMapFunc(crs, mgr.GetClient(), r.Log))).
 		Complete(r)
 }

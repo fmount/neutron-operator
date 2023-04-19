@@ -163,6 +163,11 @@ func (in *NeutronAPISpec) DeepCopyInto(out *NeutronAPISpec) {
 		}
 	}
 	out.Debug = in.Debug
+	if in.CustomServiceConfigSecrets != nil {
+		in, out := &in.CustomServiceConfigSecrets, &out.CustomServiceConfigSecrets
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.DefaultConfigOverwrite != nil {
 		in, out := &in.DefaultConfigOverwrite, &out.DefaultConfigOverwrite
 		*out = make(map[string]string, len(*in))

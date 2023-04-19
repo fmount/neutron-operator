@@ -26,35 +26,67 @@ export DBUSER=${DatabaseUser:?"Please specify a DatabaseUser variable."}
 export DBPASSWORD=${DatabasePassword:?"Please specify a DatabasePassword variable."}
 export TRANSPORTURL=${TransportURL:-""}
 
-function merge_config_dir {
-    echo merge config dir $1
-    for conf in $(find $1 -type f); do
-        conf_base=$(basename $conf)
+DEFAULT_DIR=/var/lib/config-data/default
+CUSTOM_DIR=/var/lib/config-data/custom
+MERGED_DIR=/var/lib/config-data/merged
+SVC_CFG=/etc/neutron/neutron.conf
+SVC_CFG_MERGED=${MERGED_DIR}/neutron.conf
+SVC_CFG_MERGED_DIR=${MERGED_DIR}/neutron.conf.d
 
-        # If CFG already exist in ../merged and is not a json file,
-        # Else, just copy the full file.
-        if [[ -f /var/lib/config-data/merged/${conf_base} && ${conf_base} != *.json ]]; then
-            echo merging ${conf} into /var/lib/config-data/merged/${conf_base}
-            crudini --merge /var/lib/config-data/merged/${conf_base} < ${conf}
-        else
-            echo copy ${conf} to /var/lib/config-data/merged/
-            cp -f ${conf} /var/lib/config-data/merged/
-        fi
-    done
-}
+mkdir -p ${SVC_CFG_MERGED_DIR}
 
-# Copy default service config from container image as base
-cp -a /etc/neutron/neutron.conf /var/lib/config-data/merged/neutron.conf
+cp ${DEFAULT_DIR}/* ${MERGED_DIR}
 
-# merge config files if the config mount exists
-if [[ -d /var/lib/config-data/default ]]; then
-    merge_config_dir /var/lib/config-data/default
-fi
+# Save the default service config from container image as neutron.conf.sample,
+# and create a small neutron.conf file that directs people to files in
+# neutron.conf.d.
+cp -a ${SVC_CFG} ${SVC_CFG_MERGED}.sample
+cat <<EOF > ${SVC_CFG_MERGED}
+# Service configuration snippets are stored in the neutron.conf.d subdirectory.
+EOF
 
-# set secrets
+cp ${DEFAULT_DIR}/neutron.conf ${SVC_CFG_MERGED_DIR}/00-default.conf
+
+# Generate 01-deployment-secrets.conf
+DEPLOYMENT_SECRETS=${SVC_CFG_MERGED_DIR}/01-deployment-secrets.conf
 if [ -n "$TRANSPORTURL" ]; then
-    crudini --set /var/lib/config-data/merged/neutron.conf DEFAULT transport_url $TRANSPORTURL
+    cat <<EOF > ${DEPLOYMENT_SECRETS}
+[DEFAULT]
+transport_url = ${TRANSPORTURL}
+
+EOF
 fi
-crudini --set /var/lib/config-data/merged/neutron.conf database connection mysql+pymysql://${DBUSER}:${DBPASSWORD}@${DBHOST}/${DB}
-crudini --set /var/lib/config-data/merged/neutron.conf keystone_authtoken password $PASSWORD
-crudini --set /var/lib/config-data/merged/neutron.conf nova password $PASSWORD
+
+# TODO: service token
+cat <<EOF >> ${DEPLOYMENT_SECRETS}
+[database]
+connection = mysql+pymysql://${DBUSER}:${DBPASSWORD}@${DBHOST}/${DB}
+
+[keystone_authtoken]
+password = ${PASSWORD}
+
+[nova]
+password = ${PASSWORD}
+
+[service_user]
+password = ${PASSWORD}
+EOF
+
+if [ -f ${DEFAULT_DIR}/custom.conf ]; then
+    cp ${DEFAULT_DIR}/custom.conf ${SVC_CFG_MERGED_DIR}/02-global.conf
+fi
+
+if [ -f ${CUSTOM_DIR}/custom.conf ]; then
+    cp ${CUSTOM_DIR}/custom.conf ${SVC_CFG_MERGED_DIR}/03-service.conf
+fi
+
+SECRET_FILES="$(ls /var/lib/config-data/secret-*/* 2>/dev/null || true)"
+if [ -n "${SECRET_FILES}" ]; then
+    cat ${SECRET_FILES} > ${SVC_CFG_MERGED_DIR}/04-secrets.conf
+fi
+
+# Probes cannot run kolla_set_configs because it uses the 'neutron' uid
+# and gid and doesn't have permission to make files be owned by root.
+# This means the probe must use files in the "merged" location, and the
+# files must be readable by 'neutron'.
+chown -R :neutron ${SVC_CFG_MERGED_DIR}
